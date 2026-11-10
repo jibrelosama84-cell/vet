@@ -1450,7 +1450,7 @@ async function makeMfFormPdf(){
   var lines=[];
   for(var k=0;k<c.rows.length;k++){var r=c.rows[k],a=mfActual(r.i,r.req);if(isNaN(a))return toast('الكمية الفعلية تقبل أرقاماً فقط.','bad');lines.push({m:r.m,qty:r3(a),req:r.req});}
   var batch=f.batch.trim()||nextBatch(f.date),unit=f.u==='bag'?'bag':'kg',qty=f.u==='bag'?c.q:(f.u==='t'?c.q*1000:c.q);
-  var mv={kind:'prod',date:f.date,rname:c.r.name,qty:qty,unit:unit,lines:lines,note:f.note.trim(),batch:batch,bags:bagsOf(c.r,c.q,f.u,f.bw,f.nb),bagKg:bagWt(c.r,f.bw)||0};
+  var mv={kind:'prod',date:f.date,rname:c.r.name,qty:qty,unit:unit,lines:lines,note:f.note.trim(),batch:batch,bag:bagById(f.b)?f.b:'',bags:bagsOf(c.r,c.q,f.u,f.bw,f.nb),bagKg:bagWt(c.r,f.bw)||0};
   state.busy=true;toast('جارٍ تجهيز المحضر…');
   try{var blob=await drawBatch(mv);await saveFile('محضر-تصنيع-'+batch+'.pdf',blob);toast('تم تجهيز المحضر.');}
   catch(e){if(!e||e.code!=='declined')toast('تعذر إنشاء المحضر.','bad');}
@@ -1556,10 +1556,11 @@ async function drawBatch(mv){
   cell(X-lw,sy,lw,sh,'توقيع مدير قسم البريميكس',{w:600,s:30,fill:'#fff'});
   box(M,sy,CW-lw,sh);
   var bY=sy+sh,bH=RH2>=56?RH2:56;
-  cell(X-lw,bY,lw,bH,'كيس',{c:RED,w:700,s:30});
-  cell(M,bY,CW-lw,bH,bags>0?fmt(bags):(mv.unit==='bag'?fmt(num(mv.qty)||0):''),{c:RED,w:700,s:30,ltr:true});
-  cell(X-lw,bY+bH,lw,bH,'لصاقة',{c:RED,w:700,s:30});
-  cell(M,bY+bH,CW-lw,bH,bags>0?fmt(bags):(mv.unit==='bag'?fmt(num(mv.qty)||0):''),{c:RED,w:700,s:30,ltr:true});
+  var bgo=(mv.bag&&bagById(mv.bag))?bagById(mv.bag):null;
+  var BCOL={y:'#c79a00',g:'#2e9e4f',r:'#d33a3a',b:'#2f6fd6',w:'#8a8a86',o:'#e07b00',p:'#8a4fc4',n:'#8a5a36',k:'#222222',s:'#6f757b',pk:'#e0509a'};
+  var bk=bgo?(bgo.c||bgo.color||(BAGC.filter(function(x){return x[1]===bgo.name;})[0]||[])[0]):'';var bc=bgo?(BCOL[bk]||RED):RED;
+  cell(X-lw,bY,lw,bH,bgo?'لون الكيس: '+bgo.name:'كيس',{c:bc,w:700,s:30});
+  cell(M,bY,CW-lw,bH,bags>0?fmt(bags):(mv.unit==='bag'?fmt(num(mv.qty)||0):''),{c:bc,w:700,s:30,ltr:true});
   var imgs=[{bytes:b64bytes(cv.toDataURL('image/jpeg',0.92)),w:W,h:H}];
   return buildPdf(imgs);
 }
