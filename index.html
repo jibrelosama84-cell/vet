@@ -352,7 +352,7 @@ var state={
   data:{materials:[],recipes:[],moves:[],bags:[]},
   draft:newDraft(),recv:newRecv(),matEdit:null,recEdit:null,bagEdit:null,bagRecv:newBagRecv(),
   confirm:null,logFilter:'all',logLimit:60,busy:false,imp:null,
-  rep:{from:todayStr(),to:todayStr(),pdf:null,msg:'',hideBreakage:false,hideZero:false},mf:newMf(),mr:newMr(),mx:{from:'',to:''}
+  rep:{from:todayStr(),to:todayStr(),pdf:null,msg:'',hideBreakage:false,hideZero:false},mf:newMf(),mr:newMr(),mx:{from:'',to:'',r:'',n:''}
 };
 try{var t0=localStorage.getItem('fs.tab');if(t0&&TABS.some(function(x){return x[0]===t0;}))state.tab=t0;}catch(e){}
 
@@ -1350,6 +1350,18 @@ async function saveReport(){
 
 /* ---------- material ledger report ---------- */
 function newMr(){return {m:'',from:'',to:''};}
+function parseDateIn(s){
+  s=String(s==null?'':s).replace(/[\u0660-\u0669]/g,function(c){return c.charCodeAt(0)-0x660;}).replace(/[\u06F0-\u06F9]/g,function(c){return c.charCodeAt(0)-0x6F0;}).trim();
+  if(!s)return '';
+  var p=s.split(/[\/\-.\s]+/).filter(Boolean);if(p.length!==3||!p.every(function(x){return /^\d+$/.test(x);}))return null;
+  var y,m,d;if(p[0].length===4){y=+p[0];m=+p[1];d=+p[2];}else{d=+p[0];m=+p[1];y=+p[2];if(p[2].length<=2)y+=2000;}
+  var dt=new Date(y,m-1,d);if(dt.getFullYear()!==y||dt.getMonth()!==m-1||dt.getDate()!==d||y<2000||y>2100)return null;
+  return y+'-'+String(m).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+}
+function dateField(label,bind,val){
+  var bad=parseDateIn(val)===null;
+  return '<label class="field"><span>'+label+'</span><input type="text" inputmode="numeric" dir="ltr" style="text-align:center'+(bad?';border-color:var(--bad,#b02a22)':'')+'" placeholder="12/11/2026" autocomplete="off" data-bind="'+bind+'" value="'+esc(val)+'"'+(bad?' aria-invalid="true"':'')+'>'+(bad?'<span class="hint" style="color:var(--bad,#b02a22)">اكتب التاريخ هكذا: يوم/شهر/سنة، مثل 12/11/2026</span>':'')+'</label>';
+}
 function fD(s){var p=String(s||'').split('-');return p.length===3?p[2]+'/'+p[1]+'/'+p[0]:String(s||'');}
 function f3(v){v=Math.round((num(v)||0)*1000)/1000;return v.toLocaleString('en-US',{maximumFractionDigits:3}).replace('-','−');}
 function matLedger(id,from,to){
@@ -1386,12 +1398,13 @@ function matRepView(){
     '<label class="field"><span>المادة</span><select id="mr-m" data-bind="mr.m"><option value="">اختر المادة</option>'+
     state.data.materials.slice().sort(byName).map(function(m){return '<option value="'+esc(m.id)+'"'+(m.id===r.m?' selected':'')+'>'+esc(m.name)+'</option>';}).join('')+'</select></label>'+
     '<div class="chips"><button class="chip" data-act="mrPreset" data-id="all">كل الفترة</button><button class="chip" data-act="mrPreset" data-id="month">هذا الشهر</button><button class="chip" data-act="mrPreset" data-id="30">آخر 30 يومًا</button></div>'+
-    '<div class="grid2"><label class="field"><span>من تاريخ (اختياري)</span><input type="date" data-bind="mr.from" value="'+esc(r.from)+'"></label>'+
-    '<label class="field"><span>إلى تاريخ (اختياري)</span><input type="date" data-bind="mr.to" value="'+esc(r.to)+'"></label></div></div>';
+    '<p class="hint">اكتب التاريخ بالشكل: يوم/شهر/سنة، مثل 12/11/2026 (اتركه فارغًا لكل الفترة).</p><div class="grid2">'+dateField('من تاريخ','mr.from',r.from)+dateField('إلى تاريخ','mr.to',r.to)+'</div></div>';
   if(!r.m||!matById(r.m))return h+'<div class="panel"><p class="hint">اختر المادة لعرض التقرير.</p></div>';
-  if(r.from&&r.to&&r.from>r.to)return h+'<div class="panel"><p class="hint">تاريخ البداية بعد تاريخ النهاية.</p></div>';
-  var L=matLedger(r.m,r.from,r.to);
-  h+='<div class="panel"><h3>'+esc(L.m.name)+'</h3><p class="hint">'+(r.from||r.to?'الفترة: '+(r.from?fD(r.from):'البداية')+' إلى '+(r.to?fD(r.to):'اليوم'):'كل الفترة')+' · الكميات بالكغ</p>'+
+  var pf=parseDateIn(r.from),pt=parseDateIn(r.to);
+  if(pf===null||pt===null)return h+'<div class="panel"><p class="hint">صيغة التاريخ غير صحيحة. اكتب مثل 12/11/2026.</p></div>';
+  if(pf&&pt&&pf>pt)return h+'<div class="panel"><p class="hint">تاريخ البداية بعد تاريخ النهاية.</p></div>';
+  var L=matLedger(r.m,pf,pt);
+  h+='<div class="panel"><h3>'+esc(L.m.name)+'</h3><p class="hint">'+(pf||pt?'الفترة: '+(pf?fD(pf):'البداية')+' إلى '+(pt?fD(pt):'اليوم'):'كل الفترة')+' · الكميات بالكغ</p>'+
     '<div class="list">'+
     '<div class="lrow"><div><b>'+(L.firstOpening?'الرصيد الافتتاحي':'رصيد أول الفترة')+'</b></div><div class="qty" dir="ltr">'+f3(L.open)+'</div></div>'+
     (L.rows.length?L.rows.map(function(e){
@@ -1493,11 +1506,13 @@ async function drawMatPdf(L,from,to){
   return buildPdf(pages.map(function(p){return {bytes:b64bytes(p.cv.toDataURL('image/jpeg',0.92)),w:W,h:H};}));
 }
 async function makeMatPdf(){
-  var r=state.mr,L=r.m?matLedger(r.m,r.from,r.to):null;
+  var r=state.mr,pf=parseDateIn(r.from),pt=parseDateIn(r.to);
+  if(pf===null||pt===null)return toast('صيغة التاريخ غير صحيحة. اكتب مثل 12/11/2026.','bad');
+  var L=r.m?matLedger(r.m,pf,pt):null;
   if(!L)return toast('اختر المادة أولاً.','bad');
-  if(r.from&&r.to&&r.from>r.to)return toast('تاريخ البداية بعد تاريخ النهاية.','bad');
+  if(pf&&pt&&pf>pt)return toast('تاريخ البداية بعد تاريخ النهاية.','bad');
   state.busy=true;toast('جارٍ تجهيز التقرير…');
-  try{var blob=await drawMatPdf(L,r.from,r.to);await saveFile('تقرير-مادة-'+L.m.name+'.pdf',blob);toast('تم تجهيز التقرير.');}
+  try{var blob=await drawMatPdf(L,pf,pt);await saveFile('تقرير-مادة-'+L.m.name+'.pdf',blob);toast('تم تجهيز التقرير.');}
   catch(e){if(!e||e.code!=='declined')toast('تعذر إنشاء التقرير.','bad');}
   state.busy=false;
 }
@@ -1574,16 +1589,18 @@ function xlsxBlob(sheets){
   sheets.forEach(function(s,i){files.push(['xl/worksheets/sheet'+(i+1)+'.xml',s.xml]);});
   return zipStore(files);
 }
-function mfExportData(from,to){
-  var prods=state.data.moves.filter(function(m){return m.kind==='prod'&&(!from||String(m.date)>=from)&&(!to||String(m.date)<=to);})
+function mfExportData(from,to,rid,cnt){
+  var rec=rid?recById(rid):null;
+  var prods=state.data.moves.filter(function(m){return m.kind==='prod'&&(!from||String(m.date)>=from)&&(!to||String(m.date)<=to)&&(!rid||m.rid===rid||(!m.rid&&rec&&m.rname===rec.name));})
     .sort(function(a,b){return String(a.date).localeCompare(String(b.date))||(a.ts||0)-(b.ts||0);});
+  if(cnt>0&&prods.length>cnt)prods=prods.slice(prods.length-cnt);
   var used={};prods.forEach(function(p){(p.lines||[]).forEach(function(l){used[l.m]=1;});});
   var mats=state.data.materials.filter(function(m){return used[m.id];}).sort(byName);
   var gone=Object.keys(used).filter(function(id){return !matById(id);}).map(function(id){return {id:id,name:'مادة محذوفة'};});
   return {prods:prods,mats:mats.concat(gone)};
 }
-function buildMfXlsx(from,to){
-  var d=mfExportData(from,to),prods=d.prods,mats=d.mats;
+function buildMfXlsx(from,to,rid,cnt){
+  var d=mfExportData(from,to,rid,cnt),prods=d.prods,mats=d.mats;
   var cols1=['التاريخ','رقم الدفعة','المنتج (الخلطة)','الكمية','الوحدة','عدد الأكياس','لون الكيس','ملاحظات'].concat(mats.map(function(m){return m.name+' (كغ)';})).concat(['إجمالي الخامات (كغ)']);
   var rows1=[],rows2=[];
   var nFix=8,totals=mats.map(function(){return 0;}),totAll=0,totBags=0,totQty=0;
@@ -1608,11 +1625,13 @@ function buildMfXlsx(from,to){
   return {blob:xlsxBlob([s1,s2]),n:prods.length};
 }
 async function makeMfXlsx(){
-  var x=state.mx;
-  if(x.from&&x.to&&x.from>x.to)return toast('تاريخ البداية بعد تاريخ النهاية.','bad');
-  var out=buildMfXlsx(x.from,x.to);
-  if(!out.n)return toast('لا توجد عمليات تصنيع في هذه الفترة.','bad');
-  try{await saveFile('جدول-التصنيع'+(x.from||x.to?'-'+(x.from||'')+'_'+(x.to||''):'')+'.xlsx',out.blob);toast('تم تجهيز ملف Excel ('+out.n+' عملية).');}
+  var x=state.mx,pf=parseDateIn(x.from),pt=parseDateIn(x.to);
+  if(pf===null||pt===null)return toast('صيغة التاريخ غير صحيحة. اكتب مثل 12/11/2026.','bad');
+  if(pf&&pt&&pf>pt)return toast('تاريخ البداية بعد تاريخ النهاية.','bad');
+  var cnt=0;if(String(x.n).trim()!==''){cnt=Math.floor(num(String(x.n).replace(/[\u0660-\u0669]/g,function(c){return c.charCodeAt(0)-0x660;})));if(!(cnt>0))return toast('عدد العمليات يجب أن يكون رقمًا أكبر من صفر.','bad');}
+  var out=buildMfXlsx(pf,pt,x.r,cnt),rec=x.r?recById(x.r):null;
+  if(!out.n)return toast('لا توجد عمليات تصنيع مطابقة لاختيارك.','bad');
+  try{await saveFile('جدول-التصنيع'+(rec?'-'+rec.name:'')+'.xlsx',out.blob);toast('تم تجهيز ملف Excel ('+out.n+' عملية).');}
   catch(e){if(!e||e.code!=='declined')toast('تعذر إنشاء الملف.','bad');}
 }
 
@@ -1659,9 +1678,11 @@ function mfView(){
   }
   h+='<div id="mf-sum"></div></div>'+
     '<div class="btns"><button class="btn primary" id="mfSaveBtn" data-act="mfSave">اعتماد التصنيع وسحب المواد</button><button class="btn" id="mfPdfBtn" data-act="mfPdfNow">محضر التصنيع PDF</button></div>';
-  h+='<div class="panel"><h3>تصدير التصنيع إلى Excel</h3><p class="hint">ملف Excel مجدول: ورقة لكل عملية تصنيع بالمواد المسحوبة في أعمدة مع المجاميع، وورقة تفصيل المواد.</p>'+
-    '<div class="grid2"><label class="field"><span>من تاريخ (اختياري)</span><input type="date" data-bind="mx.from" value="'+esc(state.mx.from)+'"></label>'+
-    '<label class="field"><span>إلى تاريخ (اختياري)</span><input type="date" data-bind="mx.to" value="'+esc(state.mx.to)+'"></label></div>'+
+  h+='<div class="panel"><h3>تصدير التصنيع إلى Excel</h3><p class="hint">اختر خلطة واحدة وعدد العمليات الأخيرة التي تريدها، فيُنشأ جدول مفصّل بالمواد المسحوبة لكل عملية.</p>'+
+    '<label class="field"><span>الخلطة</span><select data-bind="mx.r"><option value="">كل الخلطات</option>'+state.data.recipes.slice().sort(byName).map(function(r){return '<option value="'+esc(r.id)+'"'+(r.id===state.mx.r?' selected':'')+'>'+esc(r.name)+'</option>';}).join('')+'</select></label>'+
+    '<label class="field"><span>عدد آخر العمليات (اتركه فارغًا لكل العمليات)</span><input inputmode="numeric" data-bind="mx.n" placeholder="مثلاً 10" value="'+esc(state.mx.n)+'" autocomplete="off"></label>'+
+    '<p class="hint">يمكنك أيضًا تحديد فترة، واكتب التاريخ يوم/شهر/سنة مثل 12/11/2026:</p>'+
+    '<div class="grid2">'+dateField('من تاريخ','mx.from',state.mx.from)+dateField('إلى تاريخ','mx.to',state.mx.to)+'</div>'+
     '<div class="btns"><button class="btn primary" data-act="mxXlsx">تنزيل ملف Excel</button></div></div>';
   return h;
 }
@@ -2165,7 +2186,7 @@ $app.addEventListener('click',function(e){
     case 'repMake':makeReport();break;
     case 'mrPdf':makeMatPdf();break;
     case 'mxXlsx':makeMfXlsx();break;
-    case 'mrPreset':{var td=todayStr(),mr=state.mr;if(id==='all'){mr.from='';mr.to='';}else if(id==='month'){mr.from=td.slice(0,8)+'01';mr.to=td;}else{var d0=new Date();d0.setDate(d0.getDate()-29);mr.from=d0.getFullYear()+'-'+String(d0.getMonth()+1).padStart(2,'0')+'-'+String(d0.getDate()).padStart(2,'0');mr.to=td;}render();break;}
+    case 'mrPreset':{var td=todayStr(),mr=state.mr;if(id==='all'){mr.from='';mr.to='';}else if(id==='month'){mr.from=fD(td.slice(0,8)+'01');mr.to=fD(td);}else{var d0=new Date();d0.setDate(d0.getDate()-29);mr.from=fD(d0.getFullYear()+'-'+pad(d0.getMonth()+1)+'-'+pad(d0.getDate()));mr.to=fD(td);}render();break;}
     case 'repSave':saveReport();break;
     case 'bkExport':exportBackup();break;
     case 'impApply':applyImport();break;
@@ -2214,7 +2235,9 @@ function onBind(e){
   setPath(state,b,t.value);
   if(b==='rep.from'||b==='rep.to'){if(state.rep.pdf){state.rep.pdf=null;render();}return;}
   if(b==='mf.r'){state.mf.act=[];state.mf.bw='';state.mf.nb='';var rm=recById(t.value);if(rm){state.mf.u=rBase(rm).bu==='bag'?'bag':'kg';state.mf.b=bagById(rm.bag)?rm.bag:'';}render();return;}
-  if(b==='mr.m'||b==='mr.from'||b==='mr.to'){if(b==='mr.m'||!t.value||/^\d{4}-\d{2}-\d{2}$/.test(t.value))render();return;}
+  if(b==='mr.m'){render();return;}
+  if(b==='mr.from'||b==='mr.to'){if(e.type==='change')render();return;}
+  if(b==='mx.from'||b==='mx.to'||b==='mx.n'||b==='mx.r')return;
   if(b==='mf.date'){if(/^\d{4}-\d{2}-\d{2}$/.test(t.value))render();return;}
   var pm=b.match(/^draft\.prods\.(\d+)\.r$/);
   if(pm){var rr=recById(t.value);if(rr){var pr=state.draft.prods[Number(pm[1])];pr.bw='';pr.nb='';pr.u=rBase(rr).bu==='bag'?'bag':'kg';pr.b=bagById(rr.bag)?rr.bag:'';}render();return;}
