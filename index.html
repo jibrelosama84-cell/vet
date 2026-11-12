@@ -184,7 +184,7 @@ td.after.ok{font-weight:600}
 document.documentElement.lang='ar';
 document.documentElement.dir='rtl';
 
-var TABS=[['stock','المخزون'],['close','إغلاق اليوم'],['mf','التصنيع'],['recv','الوارد'],['recipes','الخلطات'],['bags','الأكياس'],['log','السجل']];
+var TABS=[['stock','المخزون'],['close','إغلاق اليوم'],['mf','التصنيع'],['recv','الوارد'],['recipes','الخلطات'],['bags','الأكياس'],['matrep','تقرير مادة'],['log','السجل']];
 var COLL=['materials','recipes','moves','bags'];
 var BAGC=[['y','أصفر'],['g','أخضر'],['r','أحمر'],['b','أزرق'],['w','أبيض'],['o','برتقالي'],['p','بنفسجي'],['n','بني'],['k','أسود'],['s','رمادي'],['pk','وردي']];
 var $app=document.getElementById('app');
@@ -352,7 +352,7 @@ var state={
   data:{materials:[],recipes:[],moves:[],bags:[]},
   draft:newDraft(),recv:newRecv(),matEdit:null,recEdit:null,bagEdit:null,bagRecv:newBagRecv(),
   confirm:null,logFilter:'all',logLimit:60,busy:false,imp:null,
-  rep:{from:todayStr(),to:todayStr(),pdf:null,msg:'',hideBreakage:false,hideZero:false},mf:newMf()
+  rep:{from:todayStr(),to:todayStr(),pdf:null,msg:'',hideBreakage:false,hideZero:false},mf:newMf(),mr:newMr(),mx:{from:'',to:''}
 };
 try{var t0=localStorage.getItem('fs.tab');if(t0&&TABS.some(function(x){return x[0]===t0;}))state.tab=t0;}catch(e){}
 
@@ -992,7 +992,7 @@ function logView(){
   return h;
 }
 
-var views={stock:stockView,close:closeView,mf:mfView,recv:recvView,recipes:recipesView,bags:bagsView,log:logView};
+var views={stock:stockView,close:closeView,mf:mfView,recv:recvView,recipes:recipesView,bags:bagsView,matrep:matRepView,log:logView};
 
 /* ---------- render ---------- */
 var pending=false;
@@ -1348,6 +1348,274 @@ async function saveReport(){
   catch(e){if(!e||e.code!=='declined')toast('تعذر حفظ الملف.','bad');}
 }
 
+/* ---------- material ledger report ---------- */
+function newMr(){return {m:'',from:'',to:''};}
+function fD(s){var p=String(s||'').split('-');return p.length===3?p[2]+'/'+p[1]+'/'+p[0]:String(s||'');}
+function f3(v){v=Math.round((num(v)||0)*1000)/1000;return v.toLocaleString('en-US',{maximumFractionDigits:3}).replace('-','−');}
+function matLedger(id,from,to){
+  var m=matById(id);if(!m)return null;
+  var ev=[];
+  state.data.moves.forEach(function(mv){
+    if(mv.kind==='in'&&mv.m===id)ev.push({date:String(mv.date||''),ts:mv.ts||0,type:'in',q:num(mv.qty)||0,note:mv.note||''});
+    else if(mv.kind==='out'&&mv.m===id)ev.push({date:String(mv.date||''),ts:mv.ts||0,type:'out',q:num(mv.qty)||0,note:mv.note||''});
+    else if(mv.kind==='prod')(mv.lines||[]).forEach(function(l){
+      if(l.m===id)ev.push({date:String(mv.date||''),ts:mv.ts||0,type:'prod',q:num(l.qty)||0,rname:mv.rname||'خلطة',batch:mv.batch||'',pq:num(mv.qty)||0,pu:mv.unit==='bag'?'كيس':'كغ',note:mv.note||''});
+    });
+  });
+  ev.sort(function(a,b){return a.date.localeCompare(b.date)||a.ts-b.ts;});
+  var bal=num(m.opening)||0,open=bal,rows=[],inn=0,out=0;
+  ev.forEach(function(e){
+    var isIn=e.type==='in';
+    if(from&&e.date<from){bal+=isIn?e.q:-e.q;open=bal;return;}
+    if(to&&e.date>to)return;
+    bal+=isIn?e.q:-e.q;
+    if(isIn)inn+=e.q;else out+=e.q;
+    e.bal=r3(bal);rows.push(e);
+  });
+  return {m:m,open:r3(open),rows:rows,inn:r3(inn),out:r3(out),close:r3(open+inn-out),firstOpening:!from};
+}
+function mrDesc(e){
+  if(e.type==='in')return 'وارد'+(e.note?' — '+e.note:'');
+  if(e.type==='out')return 'صادر'+(e.note?' — '+e.note:'');
+  return 'خلطة: '+e.rname+(e.batch?' · دفعة '+e.batch:'')+' ('+f3(e.pq)+' '+e.pu+')'+(e.note?' — '+e.note:'');
+}
+function matRepView(){
+  var r=state.mr,h='<div class="head"><h2>تقرير مادة</h2></div>';
+  if(!state.data.materials.length)return h+'<div class="panel"><p>أضف المواد الخام أولاً من تبويب المخزون.</p></div>';
+  h+='<div class="panel"><p class="hint">اختر مادة لترى كشف حركتها: كل وارد وكل سحب مع التاريخ ورقم الخلطة والرصيد بعد كل حركة.</p>'+
+    '<label class="field"><span>المادة</span><select id="mr-m" data-bind="mr.m"><option value="">اختر المادة</option>'+
+    state.data.materials.slice().sort(byName).map(function(m){return '<option value="'+esc(m.id)+'"'+(m.id===r.m?' selected':'')+'>'+esc(m.name)+'</option>';}).join('')+'</select></label>'+
+    '<div class="chips"><button class="chip" data-act="mrPreset" data-id="all">كل الفترة</button><button class="chip" data-act="mrPreset" data-id="month">هذا الشهر</button><button class="chip" data-act="mrPreset" data-id="30">آخر 30 يومًا</button></div>'+
+    '<div class="grid2"><label class="field"><span>من تاريخ (اختياري)</span><input type="date" data-bind="mr.from" value="'+esc(r.from)+'"></label>'+
+    '<label class="field"><span>إلى تاريخ (اختياري)</span><input type="date" data-bind="mr.to" value="'+esc(r.to)+'"></label></div></div>';
+  if(!r.m||!matById(r.m))return h+'<div class="panel"><p class="hint">اختر المادة لعرض التقرير.</p></div>';
+  if(r.from&&r.to&&r.from>r.to)return h+'<div class="panel"><p class="hint">تاريخ البداية بعد تاريخ النهاية.</p></div>';
+  var L=matLedger(r.m,r.from,r.to);
+  h+='<div class="panel"><h3>'+esc(L.m.name)+'</h3><p class="hint">'+(r.from||r.to?'الفترة: '+(r.from?fD(r.from):'البداية')+' إلى '+(r.to?fD(r.to):'اليوم'):'كل الفترة')+' · الكميات بالكغ</p>'+
+    '<div class="list">'+
+    '<div class="lrow"><div><b>'+(L.firstOpening?'الرصيد الافتتاحي':'رصيد أول الفترة')+'</b></div><div class="qty" dir="ltr">'+f3(L.open)+'</div></div>'+
+    (L.rows.length?L.rows.map(function(e){
+      var isIn=e.type==='in';
+      return '<div class="lrow"><div><b>'+esc(mrDesc(e))+'</b></div><div class="qty'+(isIn?' in':'')+'" dir="ltr">'+(isIn?'+':'−')+f3(e.q)+'</div>'+
+        '<div class="meta"><span class="sub">'+esc(fD(e.date))+'</span><span class="sub"'+(e.bal<0?' style="color:var(--bad,#b02a22)"':'')+'>الرصيد بعدها: <span dir="ltr">'+f3(e.bal)+'</span></span></div></div>';
+    }).join(''):'<div class="lrow"><span class="hint">لا توجد حركات لهذه المادة في هذه الفترة.</span></div>')+
+    '<div class="lrow"><div><b>إجمالي الوارد</b></div><div class="qty in" dir="ltr">+'+f3(L.inn)+'</div></div>'+
+    '<div class="lrow"><div><b>إجمالي المسحوب</b></div><div class="qty" dir="ltr">−'+f3(L.out)+'</div></div>'+
+    '<div class="lrow"><div><b>الرصيد الحالي للفترة</b></div><div class="qty" dir="ltr"'+(L.close<0?' style="color:var(--bad,#b02a22)"':'')+'>'+f3(L.close)+'</div></div>'+
+    '</div>'+
+    '<div class="btns"><button class="btn primary" data-act="mrPdf">تنزيل التقرير PDF</button></div></div>';
+  return h;
+}
+async function drawMatPdf(L,from,to){
+  try{await Promise.all([document.fonts.load('500 26px "IBM Plex Sans Arabic"','مخزون'),document.fonts.load('600 26px "IBM Plex Sans Arabic"','مخزون'),document.fonts.load('700 44px "Noto Kufi Arabic"','كشف')]);}catch(e){}
+  var W=1240,H=1754,M=80,CW=W-2*M,pages=[],ctx,y;
+  var F='"IBM Plex Sans Arabic","Segoe UI",Tahoma,sans-serif',FD='"Noto Kufi Arabic","IBM Plex Sans Arabic",Tahoma,sans-serif';
+  var INK='#1c1c1b',MUTE='#5b5b58',DARK='#2b2b2a',ORANGE='#f79939',LINE='#dcdcd8',BAD='#b02a22',OK='#1b7a3d';
+  var logoImg=await loadImg(LOGO),footImg=await loadImg(FOOT),LIM=H-M-50-120;
+  function newPage(){
+    var cv=document.createElement('canvas');cv.width=W;cv.height=H;
+    ctx=cv.getContext('2d');ctx.fillStyle='#ffffff';ctx.fillRect(0,0,W,H);ctx.textBaseline='middle';
+    pages.push({cv:cv,ctx:ctx});
+    var lw=CW,lh=lw*logoImg.height/logoImg.width;
+    ctx.drawImage(logoImg,M,50,lw,lh);ctx.fillStyle=ORANGE;ctx.fillRect(M,50+lh+14,lw,5);
+    y=50+lh+14+5+40;
+  }
+  function txt(s,x,yc,o){
+    o=o||{};ctx.font=(o.w||500)+' '+(o.s||26)+'px '+(o.f||F);ctx.fillStyle=o.c||INK;
+    ctx.direction=o.ltr?'ltr':'rtl';ctx.textAlign=o.a||'right';
+    s=String(s);var s0=s;
+    if(o.maxW){while(s.length>3&&ctx.measureText(s).width>o.maxW)s=s.slice(0,-2);if(s!==s0&&s.length>3)s=s+'…';}
+    ctx.fillText(s,x,yc);
+  }
+  function need(h){if(y+h>LIM)newPage();}
+  function section(s){need(250);y+=26;txt(s,W-M,y+20,{w:700,s:32,f:FD,c:DARK});var tw=ctx.measureText(s).width;ctx.fillStyle=ORANGE;ctx.fillRect(W-M-tw,y+46,tw,5);y+=68;}
+  function table(cols,rows){
+    var RH=56;
+    function head(){
+      need(RH*2);ctx.fillStyle=DARK;ctx.fillRect(M,y,CW,RH);
+      var xr=W-M;cols.forEach(function(c){txt(c.h,xr-14,y+RH/2,{w:600,s:23,c:'#ffffff',maxW:c.w-24});xr-=c.w;});
+      y+=RH;
+    }
+    head();
+    rows.forEach(function(r,i){
+      if(y+RH>LIM){newPage();head();}
+      if(i%2){ctx.fillStyle='#f6f6f4';ctx.fillRect(M,y,CW,RH);}
+      ctx.strokeStyle=LINE;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(M,y+RH);ctx.lineTo(W-M,y+RH);ctx.stroke();
+      var xr=W-M;
+      cols.forEach(function(c,j){
+        var cell=r[j],t=(cell&&typeof cell==='object')?cell.t:cell;
+        txt(t==null?'':t,xr-14,y+RH/2,{c:(cell&&cell.c)||INK,ltr:!!c.num,w:(cell&&cell.b)?600:500,maxW:c.w-28});
+        xr-=c.w;
+      });
+      y+=RH;
+    });
+    y+=12;
+  }
+  newPage();
+  txt('كشف حركة مادة: '+L.m.name,W-M,y+34,{w:700,s:46,f:FD,maxW:CW});y+=78;
+  var period=(from||to)?'من '+(from?dateLabel(from,true):'البداية')+' إلى '+(to?dateLabel(to,true):'اليوم'):'كل الفترة';
+  txt('الفترة: '+period,W-M,y+14,{s:26,c:MUTE});y+=48;
+  var nIn=L.rows.filter(function(e){return e.type==='in';}).length,nOut=L.rows.length-nIn;
+  txt('عدد الحركات: '+L.rows.length+' (وارد '+nIn+' · مسحوب '+nOut+')   ·   الوحدة: كغ',W-M,y+14,{s:25,w:600});y+=40;
+  ctx.strokeStyle=LINE;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(M,y);ctx.lineTo(W-M,y);ctx.stroke();y+=6;
+  section('ملخص الرصيد');
+  var st=stat(L.close,L.m.min),clr=st.k==='bad'?BAD:(st.k==='warn'?'#7a5a00':INK);
+  table([{h:(L.firstOpening?'الرصيد الافتتاحي':'رصيد أول الفترة'),w:270,num:true},{h:'إجمالي الوارد',w:270,num:true},{h:'إجمالي المسحوب',w:270,num:true},{h:'الرصيد في نهاية الفترة',w:270,num:true}],
+    [[f3(L.open),{t:'+'+f3(L.inn),c:OK,b:true},{t:'−'+f3(L.out),c:BAD,b:true},{t:f3(L.close),c:clr,b:true}]]);
+  if(st.k!=='ok'){need(60);txt('تنبيه: رصيد المادة '+st.t+(num(L.m.min)>0?' (حد التنبيه '+fmt(num(L.m.min))+' كغ)':''),W-M,y+20,{c:clr,w:600,s:24,maxW:CW});y+=60;}
+  section('تفاصيل الحركة');
+  if(L.rows.length){
+    table([{h:'التاريخ',w:170},{h:'النوع',w:100},{h:'البيان (الخلطة / الدفعة)',w:340},{h:'وارد',w:150,num:true},{h:'مسحوب',w:150,num:true},{h:'الرصيد',w:170,num:true}],
+      L.rows.map(function(e){
+        var isIn=e.type==='in',kind=isIn?'وارد':(e.type==='out'?'صادر':'تصنيع');
+        var d=e.type==='prod'?e.rname+(e.batch?' · دفعة '+e.batch:''):(e.note||'—');
+        if(e.type==='prod'&&e.note)d+=' — '+e.note;
+        return [fD(e.date),{t:kind,b:true,c:isIn?OK:INK},d,isIn?{t:'+'+f3(e.q),c:OK,b:true}:'',isIn?'':{t:'−'+f3(e.q),c:BAD,b:true},{t:f3(e.bal),b:true,c:e.bal<0?BAD:INK}];
+      }));
+  }else{need(60);txt('لا توجد حركات لهذه المادة في هذه الفترة.',W-M,y+20,{c:MUTE});y+=60;}
+  need(190);y+=50;
+  [['مدير المصنع',W-M-190],['مسؤول الجودة',M+190]].forEach(function(sg){
+    ctx.fillStyle='#8a8a86';ctx.fillRect(sg[1]-190,y+70,380,2);
+    txt(sg[0],sg[1],y+104,{w:600,s:26,a:'center'});
+    txt('الاسم والتوقيع',sg[1],y+138,{s:21,c:MUTE,a:'center'});
+  });
+  y+=150;
+  var n=pages.length,now=new Date();
+  pages.forEach(function(p,i){
+    ctx=p.ctx;
+    var fw=700,fh=fw*footImg.height/footImg.width;
+    ctx.fillStyle=ORANGE;ctx.fillRect(M+100,H-200,CW-200,3);ctx.drawImage(footImg,(W-fw)/2,H-185,fw,fh);
+    ctx.strokeStyle=LINE;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(M,H-M+6);ctx.lineTo(W-M,H-M+6);ctx.stroke();
+    txt('مخزون الخامات',W-M,H-M+34,{s:21,c:MUTE});
+    txt('صفحة '+(i+1)+' من '+n,M,H-M+34,{s:21,c:MUTE,a:'left'});
+    txt(now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate()),W/2,H-M+34,{s:21,c:MUTE,a:'center',ltr:true});
+  });
+  return buildPdf(pages.map(function(p){return {bytes:b64bytes(p.cv.toDataURL('image/jpeg',0.92)),w:W,h:H};}));
+}
+async function makeMatPdf(){
+  var r=state.mr,L=r.m?matLedger(r.m,r.from,r.to):null;
+  if(!L)return toast('اختر المادة أولاً.','bad');
+  if(r.from&&r.to&&r.from>r.to)return toast('تاريخ البداية بعد تاريخ النهاية.','bad');
+  state.busy=true;toast('جارٍ تجهيز التقرير…');
+  try{var blob=await drawMatPdf(L,r.from,r.to);await saveFile('تقرير-مادة-'+L.m.name+'.pdf',blob);toast('تم تجهيز التقرير.');}
+  catch(e){if(!e||e.code!=='declined')toast('تعذر إنشاء التقرير.','bad');}
+  state.busy=false;
+}
+
+/* ---------- Excel export (manufacturing) ---------- */
+var CRC_T=null;
+function crc32(u8){
+  if(!CRC_T){CRC_T=new Uint32Array(256);for(var n=0;n<256;n++){var c=n;for(var k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;CRC_T[n]=c>>>0;}}
+  var c=0xFFFFFFFF;for(var i=0;i<u8.length;i++)c=CRC_T[(c^u8[i])&255]^(c>>>8);return (c^0xFFFFFFFF)>>>0;
+}
+function zipStore(files){
+  var enc=new TextEncoder(),parts=[],cd=[],off=0;
+  function u16(v){return [v&255,(v>>>8)&255];}
+  function u32(v){return [v&255,(v>>>8)&255,(v>>>16)&255,(v>>>24)&255];}
+  files.forEach(function(f){
+    var nm=enc.encode(f[0]),data=enc.encode(f[1]),crc=crc32(data);
+    var lh=[].concat(u32(0x04034b50),u16(20),u16(0x0800),u16(0),u16(0),u16(0x21),u32(crc),u32(data.length),u32(data.length),u16(nm.length),u16(0));
+    parts.push(new Uint8Array(lh),nm,data);
+    cd.push({nm:nm,crc:crc,len:data.length,off:off});
+    off+=lh.length+nm.length+data.length;
+  });
+  var cdStart=off,cdLen=0;
+  cd.forEach(function(e){
+    var h=[].concat(u32(0x02014b50),u16(20),u16(20),u16(0x0800),u16(0),u16(0),u16(0x21),u32(e.crc),u32(e.len),u32(e.len),u16(e.nm.length),u16(0),u16(0),u16(0),u16(0),u32(0),u32(e.off));
+    parts.push(new Uint8Array(h),e.nm);cdLen+=h.length+e.nm.length;
+  });
+  parts.push(new Uint8Array([].concat(u32(0x06054b50),u16(0),u16(0),u16(cd.length),u16(cd.length),u32(cdLen),u32(cdStart),u16(0))));
+  return new Blob(parts,{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+}
+function xEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g,'');}
+function xCol(i){var s='';i++;while(i>0){var m=(i-1)%26;s=String.fromCharCode(65+m)+s;i=Math.floor((i-1)/26);}return s;}
+function xDate(s){var p=String(s).split('-').map(Number);return Math.round((Date.UTC(p[0],p[1]-1,p[2])-Date.UTC(1899,11,30))/86400000);}
+/* cell: string | number | {v,s,f,d}  styles: 1 header, 2 text, 3 number, 4 date, 5 total text, 6 total number */
+function xSheet(cols,rows,widths,totalRow){
+  var xml='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView rightToLeft="1" workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="20"/><cols>'+
+    widths.map(function(w,i){return '<col min="'+(i+1)+'" max="'+(i+1)+'" width="'+w+'" customWidth="1"/>';}).join('')+'</cols><sheetData>';
+  function cellXml(r,c,v){
+    var ref=xCol(c)+r,s=2,val=v,f=null;
+    if(v&&typeof v==='object'){s=v.s||2;val=v.v;f=v.f||null;}
+    if(typeof val==='number'){return '<c r="'+ref+'" s="'+(v&&v.s?v.s:3)+'">'+(f?'<f>'+xEsc(f)+'</f>':'')+'<v>'+val+'</v></c>';}
+    if(val===''||val==null)return '<c r="'+ref+'" s="'+s+'"/>';
+    return '<c r="'+ref+'" s="'+s+'" t="inlineStr"><is><t xml:space="preserve">'+xEsc(val)+'</t></is></c>';
+  }
+  xml+='<row r="1" ht="26" customHeight="1">'+cols.map(function(h,c){return '<c r="'+xCol(c)+'1" s="1" t="inlineStr"><is><t>'+xEsc(h)+'</t></is></c>';}).join('')+'</row>';
+  rows.forEach(function(r,i){xml+='<row r="'+(i+2)+'">'+r.map(function(v,c){return cellXml(i+2,c,v);}).join('')+'</row>';});
+  var last=rows.length+1;
+  if(totalRow){xml+='<row r="'+(last+1)+'">'+totalRow.map(function(v,c){return cellXml(last+1,c,v);}).join('')+'</row>';}
+  xml+='</sheetData>'+(rows.length?'<autoFilter ref="A1:'+xCol(cols.length-1)+last+'"/>':'')+'<pageMargins left="0.5" right="0.5" top="0.6" bottom="0.6" header="0.3" footer="0.3"/><pageSetup orientation="landscape" fitToHeight="0"/></worksheet>';
+  return xml;
+}
+function xlsxBlob(sheets){
+  var ct='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'+
+    sheets.map(function(s,i){return '<Override PartName="/xl/worksheets/sheet'+(i+1)+'.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>';}).join('')+'</Types>';
+  var rels='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>';
+  var wb='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView/></bookViews><sheets>'+
+    sheets.map(function(s,i){return '<sheet name="'+xEsc(s.name)+'" sheetId="'+(i+1)+'" r:id="rId'+(i+1)+'"/>';}).join('')+'</sheets></workbook>';
+  var wrels='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+
+    sheets.map(function(s,i){return '<Relationship Id="rId'+(i+1)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet'+(i+1)+'.xml"/>';}).join('')+
+    '<Relationship Id="rId'+(sheets.length+1)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>';
+  var st='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'+
+    '<numFmts count="2"><numFmt numFmtId="164" formatCode="#,##0.###"/><numFmt numFmtId="165" formatCode="yyyy/mm/dd"/></numFmts>'+
+    '<fonts count="3"><font><sz val="12"/><name val="Arial"/></font><font><b/><sz val="12"/><color rgb="FFFFFFFF"/><name val="Arial"/></font><font><b/><sz val="12"/><name val="Arial"/></font></fonts>'+
+    '<fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF2B2B2A"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFCD79B"/></patternFill></fill></fills>'+
+    '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFBBBBB6"/></left><right style="thin"><color rgb="FFBBBBB6"/></right><top style="thin"><color rgb="FFBBBBB6"/></top><bottom style="thin"><color rgb="FFBBBBB6"/></bottom><diagonal/></border></borders>'+
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'+
+    '<cellXfs count="7"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'+
+    '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>'+
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>'+
+    '<xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'+
+    '<xf numFmtId="165" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'+
+    '<xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>'+
+    '<xf numFmtId="164" fontId="2" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf></cellXfs></styleSheet>';
+  var files=[['[Content_Types].xml',ct],['_rels/.rels',rels],['xl/workbook.xml',wb],['xl/_rels/workbook.xml.rels',wrels],['xl/styles.xml',st]];
+  sheets.forEach(function(s,i){files.push(['xl/worksheets/sheet'+(i+1)+'.xml',s.xml]);});
+  return zipStore(files);
+}
+function mfExportData(from,to){
+  var prods=state.data.moves.filter(function(m){return m.kind==='prod'&&(!from||String(m.date)>=from)&&(!to||String(m.date)<=to);})
+    .sort(function(a,b){return String(a.date).localeCompare(String(b.date))||(a.ts||0)-(b.ts||0);});
+  var used={};prods.forEach(function(p){(p.lines||[]).forEach(function(l){used[l.m]=1;});});
+  var mats=state.data.materials.filter(function(m){return used[m.id];}).sort(byName);
+  var gone=Object.keys(used).filter(function(id){return !matById(id);}).map(function(id){return {id:id,name:'مادة محذوفة'};});
+  return {prods:prods,mats:mats.concat(gone)};
+}
+function buildMfXlsx(from,to){
+  var d=mfExportData(from,to),prods=d.prods,mats=d.mats;
+  var cols1=['التاريخ','رقم الدفعة','المنتج (الخلطة)','الكمية','الوحدة','عدد الأكياس','لون الكيس','ملاحظات'].concat(mats.map(function(m){return m.name+' (كغ)';})).concat(['إجمالي الخامات (كغ)']);
+  var rows1=[],rows2=[];
+  var nFix=8,totals=mats.map(function(){return 0;}),totAll=0,totBags=0,totQty=0;
+  prods.forEach(function(p,ri){
+    var per={};(p.lines||[]).forEach(function(l){per[l.m]=(per[l.m]||0)+(num(l.qty)||0);});
+    var sum=0,matCells=mats.map(function(m,i){var q=per[m.id]||0;sum+=q;totals[i]+=q;return q?{v:r3(q),s:3}:{v:'',s:2};});
+    totAll+=sum;
+    var bags=num(p.bags)||0;totBags+=bags;
+    rows1.push([{v:xDate(p.date),s:4},p.batch||'',p.rname||'',{v:num(p.qty)||0,s:3},p.unit==='bag'?'كيس':'كغ',bags?{v:bags,s:3}:{v:'',s:2},(p.bag&&bagById(p.bag))?bagName(p.bag):'',p.note||''].concat(matCells).concat([{v:r3(sum),s:3}]));
+    Object.keys(per).forEach(function(id){rows2.push([{v:xDate(p.date),s:4},p.batch||'',p.rname||'',matName(id),{v:r3(per[id]),s:3}]);});
+  });
+  var tr=[{v:'المجموع',s:5},{v:'',s:5},{v:'',s:5},{v:'',s:5},{v:'',s:5},{v:totBags||'',s:6},{v:'',s:5},{v:'',s:5}];
+  var n=prods.length;
+  mats.forEach(function(m,i){var L=xCol(nFix+i);tr.push({v:r3(totals[i]),s:6,f:n?'SUM('+L+'2:'+L+(n+1)+')':null});});
+  tr.push({v:r3(totAll),s:6,f:n?'SUM('+xCol(nFix+mats.length)+'2:'+xCol(nFix+mats.length)+(n+1)+')':null});
+  if(n)tr[5]={v:totBags,s:6,f:'SUM(F2:F'+(n+1)+')'};
+  var w1=[13,13,26,11,9,12,14,24].concat(mats.map(function(){return 15;})).concat([18]);
+  var s1={name:'جدول التصنيع',xml:xSheet(cols1,rows1,w1,tr)};
+  var tot2=rows2.reduce(function(a,r){return a+r[4].v;},0),m2=rows2.length;
+  var s2={name:'تفصيل المواد',xml:xSheet(['التاريخ','رقم الدفعة','المنتج (الخلطة)','المادة','الكمية (كغ)'],rows2,[13,13,26,26,16],
+    [{v:'المجموع',s:5},{v:'',s:5},{v:'',s:5},{v:'',s:5},{v:r3(tot2),s:6,f:m2?'SUM(E2:E'+(m2+1)+')':null}])};
+  return {blob:xlsxBlob([s1,s2]),n:prods.length};
+}
+async function makeMfXlsx(){
+  var x=state.mx;
+  if(x.from&&x.to&&x.from>x.to)return toast('تاريخ البداية بعد تاريخ النهاية.','bad');
+  var out=buildMfXlsx(x.from,x.to);
+  if(!out.n)return toast('لا توجد عمليات تصنيع في هذه الفترة.','bad');
+  try{await saveFile('جدول-التصنيع'+(x.from||x.to?'-'+(x.from||'')+'_'+(x.to||''):'')+'.xlsx',out.blob);toast('تم تجهيز ملف Excel ('+out.n+' عملية).');}
+  catch(e){if(!e||e.code!=='declined')toast('تعذر إنشاء الملف.','bad');}
+}
+
 /* ---------- manufacturing record ---------- */
 function newMf(){return {date:todayStr(),r:'',q:'',u:'bag',b:'',bw:'',nb:'',batch:'',op:'',note:'',act:[],last:null};}
 function nextBatch(date){
@@ -1391,6 +1659,10 @@ function mfView(){
   }
   h+='<div id="mf-sum"></div></div>'+
     '<div class="btns"><button class="btn primary" id="mfSaveBtn" data-act="mfSave">اعتماد التصنيع وسحب المواد</button><button class="btn" id="mfPdfBtn" data-act="mfPdfNow">محضر التصنيع PDF</button></div>';
+  h+='<div class="panel"><h3>تصدير التصنيع إلى Excel</h3><p class="hint">ملف Excel مجدول: ورقة لكل عملية تصنيع بالمواد المسحوبة في أعمدة مع المجاميع، وورقة تفصيل المواد.</p>'+
+    '<div class="grid2"><label class="field"><span>من تاريخ (اختياري)</span><input type="date" data-bind="mx.from" value="'+esc(state.mx.from)+'"></label>'+
+    '<label class="field"><span>إلى تاريخ (اختياري)</span><input type="date" data-bind="mx.to" value="'+esc(state.mx.to)+'"></label></div>'+
+    '<div class="btns"><button class="btn primary" data-act="mxXlsx">تنزيل ملف Excel</button></div></div>';
   return h;
 }
 function mfLive(){
@@ -1891,6 +2163,9 @@ $app.addEventListener('click',function(e){
     case 'repHideZero':state.rep.hideZero=true;state.rep.pdf=null;state.rep.msg='';render();break;
     case 'repShowZero':state.rep.hideZero=false;state.rep.pdf=null;state.rep.msg='';render();break;
     case 'repMake':makeReport();break;
+    case 'mrPdf':makeMatPdf();break;
+    case 'mxXlsx':makeMfXlsx();break;
+    case 'mrPreset':{var td=todayStr(),mr=state.mr;if(id==='all'){mr.from='';mr.to='';}else if(id==='month'){mr.from=td.slice(0,8)+'01';mr.to=td;}else{var d0=new Date();d0.setDate(d0.getDate()-29);mr.from=d0.getFullYear()+'-'+String(d0.getMonth()+1).padStart(2,'0')+'-'+String(d0.getDate()).padStart(2,'0');mr.to=td;}render();break;}
     case 'repSave':saveReport();break;
     case 'bkExport':exportBackup();break;
     case 'impApply':applyImport();break;
@@ -1939,6 +2214,7 @@ function onBind(e){
   setPath(state,b,t.value);
   if(b==='rep.from'||b==='rep.to'){if(state.rep.pdf){state.rep.pdf=null;render();}return;}
   if(b==='mf.r'){state.mf.act=[];state.mf.bw='';state.mf.nb='';var rm=recById(t.value);if(rm){state.mf.u=rBase(rm).bu==='bag'?'bag':'kg';state.mf.b=bagById(rm.bag)?rm.bag:'';}render();return;}
+  if(b==='mr.m'||b==='mr.from'||b==='mr.to'){if(b==='mr.m'||!t.value||/^\d{4}-\d{2}-\d{2}$/.test(t.value))render();return;}
   if(b==='mf.date'){if(/^\d{4}-\d{2}-\d{2}$/.test(t.value))render();return;}
   var pm=b.match(/^draft\.prods\.(\d+)\.r$/);
   if(pm){var rr=recById(t.value);if(rr){var pr=state.draft.prods[Number(pm[1])];pr.bw='';pr.nb='';pr.u=rBase(rr).bu==='bag'?'bag':'kg';pr.b=bagById(rr.bag)?rr.bag:'';}render();return;}
